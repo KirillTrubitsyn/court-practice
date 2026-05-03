@@ -6,9 +6,9 @@ mcp[cli]==1.27.0
 starlette==0.41.3
 uvicorn[standard]==0.32.1
 
-# Конфиг
-pydantic==2.10.4
-pydantic-settings==2.7.0
+# Конфиг. mcp>=1.27 требует pydantic>=2.11, поэтому держим свежие.
+pydantic==2.13.3
+pydantic-settings==2.14.0
 
 # HTTP клиент для Voyage
 httpx==0.28.1
