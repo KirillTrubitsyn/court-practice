@@ -61,6 +61,24 @@ class Settings(BaseSettings):
         }
         return {k: v for k, v in candidates.items() if v is not None}
 
+    # === Безопасность транспорта MCP ===
+    # MCP SDK 1.27 по умолчанию защищается от DNS rebinding (отвергает 421
+    # на чужой Host header). На Railway за HTTPS-edge это не нужно — HTTPS
+    # уже исключает атаку. Поэтому по умолчанию защита выключена.
+    # Если хочется включить — выставь MCP_ENABLE_DNS_REBINDING_PROTECTION=true
+    # и MCP_ALLOWED_HOSTS со списком разрешённых host через запятую.
+    mcp_enable_dns_rebinding_protection: bool = False
+    mcp_allowed_hosts: str = ""  # comma-separated
+    mcp_allowed_origins: str = ""  # comma-separated
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        return [h.strip() for h in self.mcp_allowed_hosts.split(",") if h.strip()]
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.mcp_allowed_origins.split(",") if o.strip()]
+
     # === OAuth (multi-user через shared password) ===
     # Если задан — на /authorize показывается форма с этим паролем.
     # Все коллеги вводят один и тот же пароль (как Wi-Fi). Если None — OAuth flow выключен,
