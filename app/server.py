@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from functools import partial
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -152,6 +153,22 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppState]:
         logger.info("shutdown_done")
 
 
+def _transport_security(settings: Settings) -> TransportSecuritySettings | None:
+    """Если защита явно включена — отдаём настройки; иначе None (защита выключена).
+
+    На Railway за HTTPS-edge атака DNS rebinding неактуальна — браузер всё равно ходит
+    через TLS, host задан в URL. Защиту имеет смысл включать, только если сервер слушает
+    на голом 0.0.0.0 без HTTPS-прокси перед собой.
+    """
+    if not settings.mcp_enable_dns_rebinding_protection:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=settings.allowed_hosts_list or ["*"],
+        allowed_origins=settings.allowed_origins_list or ["*"],
+    )
+
+
 mcp = FastMCP(
     name="court-practice",
     instructions=(
@@ -160,6 +177,7 @@ mcp = FastMCP(
         "близкие кейсы — find_similar, метаданные — stats, теги — list_tags."
     ),
     lifespan=lifespan,
+    transport_security=_transport_security(get_settings()),
 )
 register_all(mcp)
 
