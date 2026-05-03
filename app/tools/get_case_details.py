@@ -12,11 +12,11 @@ from typing import Annotated, Any
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
-from app.tools._common import EngineNotReadyError, get_engine
+from app.tools._common import READ_ONLY_ANNOTATIONS, EngineNotReadyError, get_engine
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def get_case_details(
         case_id: Annotated[
             int,

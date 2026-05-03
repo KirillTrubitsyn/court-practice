@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from app.tools._common import EngineNotReadyError, get_engine
+from app.tools._common import READ_ONLY_ANNOTATIONS, EngineNotReadyError, get_engine
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
     async def stats(ctx: Context) -> dict:
         """Метаданные базы судебной практики (когда индексировано, сколько кейсов, разбивка)."""
         try:
