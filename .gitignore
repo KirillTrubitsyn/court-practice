@@ -13,12 +13,13 @@ htmlcov/
 dist/
 build/
 
-# Data artefacts — индексы и эмбеддинги храним в Volume, а не в git
-data/*.pkl
-data/*.pkl.gz
-data/*.npy
-data/*.json
-!data/.gitkeep
+# Артефакты reference-скилла, которые НЕ должны попасть в git
+data/.voyage_config.json
+data/query_cache.pkl
+data/court_practice_db.json
 
-# Reference (приложенный исходный скилл, если положишь)
-reference/
+# Артефакты пересборки. Текущие index.pkl.gz и embeddings.npy уже коммичены —
+# чтобы их не перезаписать случайно при ребилде в продакшене, опционально
+# раскомментируй:
+# data/index.pkl.gz
+# data/embeddings.npy

@@ -1,9 +1,13 @@
-"""Полная карточка определения по id."""
+"""Полная карточка определения по id.
+
+Возвращает все секции (фабула, позиции нижестоящих, позиция ВС), реквизиты,
+теги и нормы. Леммы и нормализованный case_id отдаются как метаинформация.
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
@@ -19,13 +23,16 @@ def register(mcp: FastMCP) -> None:
             Field(ge=0, description="id из поля 'id' в результатах search_practice"),
         ],
         ctx: Context,
-    ) -> dict:
-        """Вернуть полную карточку определения: фабула, позиции судов, нормы, теги."""
+    ) -> dict[str, Any]:
+        """Вернуть полную карточку определения: фабула, позиции судов, нормы, теги, текст."""
         try:
             engine = get_engine(ctx)
         except EngineNotReadyError as exc:
             return {"error": "engine_not_ready", "message": str(exc)}
-        case = engine.get_case(case_id)
-        if case is None:
+        doc = engine.get_case(case_id)
+        if doc is None:
             return {"error": "not_found", "case_id": case_id}
-        return asdict(case)
+        # Леммы — служебка для семантического слоя; в ответ не отдаём.
+        payload = asdict(doc)
+        payload.pop("lemmas", None)
+        return payload

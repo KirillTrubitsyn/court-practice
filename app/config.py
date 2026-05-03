@@ -42,6 +42,25 @@ class Settings(BaseSettings):
     bm25_weight: float = 1.0
     semantic_weight: float = 1.0
 
+    # === Веса секций BM25 (переопределяют DEFAULT_SECTION_WEIGHTS из reference) ===
+    section_weight_title: float | None = None
+    section_weight_vs_position: float | None = None
+    section_weight_full: float | None = None
+    section_weight_fabula: float | None = None
+    section_weight_tags: float | None = None
+
+    @property
+    def section_weights_override(self) -> dict[str, float]:
+        """Только заданные через env веса. Незаданные оставляют дефолт reference."""
+        candidates = {
+            "title": self.section_weight_title,
+            "vs_position": self.section_weight_vs_position,
+            "full": self.section_weight_full,
+            "fabula": self.section_weight_fabula,
+            "tags": self.section_weight_tags,
+        }
+        return {k: v for k, v in candidates.items() if v is not None}
+
     # === Прочее ===
     log_level: str = "INFO"
     port: int = 8000
