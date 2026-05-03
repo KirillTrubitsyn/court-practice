@@ -1,0 +1,10 @@
+{
+  "model": "voyage-3-large",
+  "dimension": 1024,
+  "documents": 5346,
+  "normalized": true,
+  "total_tokens": 3243461,
+  "estimated_cost_usd": 0.5838,
+  "elapsed_seconds": 64.8,
+  "built_at": "2026-05-03T05:39:30"
+}

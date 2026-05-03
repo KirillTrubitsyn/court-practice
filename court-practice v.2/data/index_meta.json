@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "built_at": "2026-05-03T04:56:59.662301",
+  "documents_count": 5346,
+  "section_stats": {
+    "fabula": 2169,
+    "lower_courts": 1705,
+    "vs_position": 2406,
+    "residual_only": 2910
+  },
+  "duplicates": {
+    "unique_cases": 3806,
+    "cases_with_dups": 260,
+    "records_in_dups": 532
+  },
+  "fields": [
+    "title",
+    "fabula",
+    "vs_position",
+    "full",
+    "tags"
+  ],
+  "lemma_cache_size": 54348,
+  "index_size_mb": 53.4
+}
