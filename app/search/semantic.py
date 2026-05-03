@@ -1,4 +1,8 @@
-"""Семантический слой: Voyage клиент + cosine search по mmap-эмбеддингам."""
+"""Семантический слой: Voyage клиент + cosine search по mmap-эмбеддингам.
+
+Эмбеддинги корпуса хранятся float16 normalized (как в reference) — это даёт
+~10МБ для 5346×1024. При запросе берём float32 для точности dot product.
+"""
 
 from __future__ import annotations
 
@@ -18,11 +22,11 @@ _VOYAGE_URL: Final = "https://api.voyageai.com/v1/embeddings"
 
 
 class VoyageError(RuntimeError):
-    """Любая ошибка обращения к Voyage."""
+    """Ошибка обращения к Voyage API."""
 
 
 class VoyageClient:
-    """Async клиент Voyage AI с retry на 429 / 5xx."""
+    """Async клиент Voyage AI с retry на 429 / 5xx (4 попытки, exponential backoff)."""
 
     def __init__(
         self,
@@ -47,20 +51,14 @@ class VoyageClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def embed(
-        self,
-        texts: list[str],
-        input_type: str = "query",
-    ) -> np.ndarray:
+    async def embed(self, texts: list[str], input_type: str = "query") -> np.ndarray:
         """Вернуть L2-нормализованную матрицу эмбеддингов (len(texts), dim) float32."""
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
-
         payload: dict[str, Any] = {
             "input": texts,
             "model": self._model,
             "input_type": input_type,
-            "output_dtype": "float",
         }
         data = await self._post_with_retry(payload)
         rows = data.get("data") or []
@@ -111,12 +109,12 @@ def _l2_normalize(matrix: np.ndarray) -> np.ndarray:
 
 
 class SemanticIndex:
-    """Хранит эмбеддинги корпуса (mmap). Поиск — обычное матричное умножение."""
+    """Хранит эмбеддинги корпуса. Под капотом — mmap или in-memory; на API не влияет."""
 
     def __init__(self, embeddings: np.ndarray) -> None:
         if embeddings.ndim != 2:
             raise ValueError(f"embeddings: ожидаю 2D, получил shape={embeddings.shape}")
-        self._embeddings = embeddings  # (N, D), уже L2-нормализованы
+        self._embeddings = embeddings  # (N, D), нормализованы
 
     @property
     def dim(self) -> int:
@@ -126,13 +124,14 @@ class SemanticIndex:
     def size(self) -> int:
         return int(self._embeddings.shape[0])
 
+    def score_all(self, query_vec: np.ndarray) -> np.ndarray:
+        """Cosine similarity для всего корпуса. Возвращает float32 массив длины N."""
+        # При float16 источнике — каст вверх, чтобы избежать fp16 overflow в matmul.
+        emb = self._embeddings.astype(np.float32, copy=False)
+        return emb @ query_vec.astype(np.float32, copy=False).reshape(-1)
+
     def rank(self, query_vec: np.ndarray, top_k: int) -> list[tuple[int, float]]:
-        if query_vec.shape[-1] != self._embeddings.shape[1]:
-            raise ValueError(
-                f"dim mismatch: query={query_vec.shape[-1]}, corpus={self._embeddings.shape[1]}"
-            )
-        # query_vec: (D,) или (1, D) → (N,)
-        scores = self._embeddings @ query_vec.reshape(-1)
+        scores = self.score_all(query_vec)
         if top_k >= scores.shape[0]:
             order = np.argsort(-scores)
         else:
@@ -145,4 +144,7 @@ class SemanticIndex:
 
 
 def query_hash(query: str) -> str:
-    return hashlib.sha256(query.lower().strip().encode("utf-8")).hexdigest()
+    import re
+
+    norm = re.sub(r"\s+", " ", query.strip().lower())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()

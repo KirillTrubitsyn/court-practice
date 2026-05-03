@@ -24,6 +24,7 @@ from app import __version__
 from app.auth import BearerAuthMiddleware
 from app.config import Settings, get_settings
 from app.logging_setup import configure_logging
+from app.search.bm25 import DEFAULT_SECTION_WEIGHTS
 from app.search.engine import IndexBundle, SearchEngine
 from app.search.semantic import SemanticIndex, VoyageClient
 from app.storage.index_loader import (
@@ -59,17 +60,22 @@ def _build_engine(
     semantic: SemanticIndex | None
     if embeddings is None:
         semantic = None
-    elif embeddings.shape[0] != len(bundle.cases):
+    elif embeddings.shape[0] != len(bundle.documents):
         logger.error(
             "embeddings_size_mismatch",
-            extra={"embeddings": embeddings.shape[0], "cases": len(bundle.cases)},
+            extra={"embeddings": embeddings.shape[0], "documents": len(bundle.documents)},
         )
         semantic = None
     else:
         semantic = SemanticIndex(embeddings)
 
+    # Веса секций — env-переопределяемые; пустые наследуем из дефолта reference.
+    section_weights = dict(DEFAULT_SECTION_WEIGHTS)
+    section_weights.update(settings.section_weights_override)
+
     return SearchEngine(
         bundle=bundle,
+        section_weights=section_weights,
         semantic=semantic,
         voyage=voyage if semantic is not None else None,
         cache=cache if semantic is not None else None,
