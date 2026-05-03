@@ -1,5 +1,6 @@
-# MCP SDK (включает FastMCP). 1.6+ поддерживает streamable-http транспорт.
-mcp[cli]==1.6.0
+# MCP SDK (включает FastMCP). Streamable HTTP transport поддерживается с 1.7+.
+# Берём последнюю стабильную: 1.27 умеет streamable_http_app() и custom_route.
+mcp[cli]==1.27.0
 
 # ASGI + сервер
 starlette==0.41.3
