@@ -10,7 +10,26 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 
-PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/healthz"})
+# Точные пути, на которых не требуется bearer-токен:
+# - /health, /healthz — Railway healthcheck
+# - /.well-known/* — OAuth 2.1 discovery (Claude.ai web дёргает их перед /mcp).
+#   Мы возвращаем 404, чтобы клиент откатился на Bearer flow из коннектор-конфига.
+# - /register — OAuth Dynamic Client Registration (та же история, отдаём 404).
+PUBLIC_PATHS: frozenset[str] = frozenset(
+    {
+        "/health",
+        "/healthz",
+        "/register",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+        "/.well-known/openid-configuration",
+    }
+)
+
+# Любой путь под этим префиксом — публичный. Это даёт устойчивость к новым
+# discovery-эндпоинтам, которые могут появиться в будущих ревизиях OAuth.
+PUBLIC_PREFIXES: tuple[str, ...] = ("/.well-known/",)
 
 
 class BearerAuthMiddleware:
@@ -26,7 +45,8 @@ class BearerAuthMiddleware:
             return
 
         request = Request(scope, receive=receive)
-        if request.url.path in PUBLIC_PATHS:
+        path = request.url.path
+        if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
             await self.app(scope, receive, send)
             return
 

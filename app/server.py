@@ -157,12 +157,21 @@ register_all(mcp)
 
 
 async def _health(_request: Request) -> JSONResponse:
-    """Публичный health endpoint для Railway healthcheck."""
+    """Публичный health endpoint. Принимаем GET/POST/HEAD — Railway пингует разными методами."""
     return JSONResponse({"status": "ok", "version": __version__})
 
 
+async def _oauth_not_supported(_request: Request) -> JSONResponse:
+    """Discovery-эндпоинты OAuth 2.1, на которые ходит claude.ai web.
+
+    Мы НЕ реализуем OAuth — auth у нас static Bearer из конфига коннектора.
+    Возвращаем 404, чтобы клиент откатился на Bearer flow вместо registration.
+    """
+    return JSONResponse({"error": "not_found"}, status_code=404)
+
+
 def _build_app() -> Starlette:
-    """Внешний Starlette: /health + Mount("/", FastMCP) + bearer middleware.
+    """Внешний Starlette: /health + discovery 404s + Mount("/", FastMCP) + bearer middleware.
 
     Lifespan FastMCP-приложения проксируется через inner.router.lifespan_context,
     чтобы при старте сервера выполнился наш `lifespan(server)` и поднял SearchEngine.
@@ -175,10 +184,35 @@ def _build_app() -> Starlette:
         async with inner.router.lifespan_context(inner):
             yield
 
+    health_methods = ["GET", "POST", "HEAD"]
+    oauth_methods = ["GET", "POST", "HEAD"]
+
     return Starlette(
         routes=[
-            Route("/health", _health, methods=["GET"]),
-            Route("/healthz", _health, methods=["GET"]),
+            Route("/health", _health, methods=health_methods),
+            Route("/healthz", _health, methods=health_methods),
+            # OAuth 2.1 discovery: возвращаем 404, чтобы клиент пошёл на static Bearer.
+            Route(
+                "/.well-known/oauth-authorization-server",
+                _oauth_not_supported,
+                methods=oauth_methods,
+            ),
+            Route(
+                "/.well-known/oauth-protected-resource",
+                _oauth_not_supported,
+                methods=oauth_methods,
+            ),
+            Route(
+                "/.well-known/oauth-protected-resource/mcp",
+                _oauth_not_supported,
+                methods=oauth_methods,
+            ),
+            Route(
+                "/.well-known/openid-configuration",
+                _oauth_not_supported,
+                methods=oauth_methods,
+            ),
+            Route("/register", _oauth_not_supported, methods=oauth_methods),
             Mount("/", app=inner),
         ],
         middleware=[
