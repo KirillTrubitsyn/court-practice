@@ -6,7 +6,7 @@ builder = "NIXPACKS"
 # ВАЖНО: Railway exec-ит startCommand напрямую, БЕЗ shell-интерполяции.
 # Поэтому `${PORT}` нужно подставлять через явный `sh -c`, иначе uvicorn получит
 # литеральную строку и упадёт с "Invalid value for '--port': '${PORT}'".
-startCommand = "sh -c 'uvicorn app.server:app --host 0.0.0.0 --port ${PORT:-8000} --log-config=null'"
+startCommand = "sh -c 'uvicorn app.server:app --host 0.0.0.0 --port ${PORT:-8000}'"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
