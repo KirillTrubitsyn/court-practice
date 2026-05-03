@@ -1,12 +1,16 @@
 """FastMCP сервер с Streamable HTTP транспортом.
 
-Точка входа для uvicorn:  `uvicorn app.server:app`.
+Точка входа для uvicorn: `uvicorn app.server:app`.
 
 Архитектура:
 - mcp = FastMCP(...) — инстанс с lifespan, внутри которого инициализируется SearchEngine.
-- mcp.custom_route("/health", ...) — публичный health для Railway, без аутентификации.
-- streamable_http_app() — ASGI приложение с MCP-эндпоинтом на /mcp.
-- BearerAuthMiddleware повешен на это приложение; он сам пропускает /health.
+- mcp.streamable_http_app() возвращает Starlette ASGI app с MCP на /mcp.
+- Оборачиваем его внешним Starlette: добавляем /health (без auth) + bearer middleware.
+- Lifespan проксируется через `inner.router.lifespan_context` — иначе FastMCP-ный
+  startup/shutdown не выполнится.
+
+В mcp==1.6.0 нет `mcp.custom_route` — поэтому /health прибит как обычный Route
+во внешнем Starlette, а BearerAuthMiddleware сам пропускает /health и /healthz.
 """
 
 from __future__ import annotations
@@ -17,8 +21,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 from app import __version__
 from app.auth import BearerAuthMiddleware
@@ -69,7 +76,6 @@ def _build_engine(
     else:
         semantic = SemanticIndex(embeddings)
 
-    # Веса секций — env-переопределяемые; пустые наследуем из дефолта reference.
     section_weights = dict(DEFAULT_SECTION_WEIGHTS)
     section_weights.update(settings.section_weights_override)
 
@@ -150,21 +156,36 @@ mcp = FastMCP(
 register_all(mcp)
 
 
-@mcp.custom_route("/health", methods=["GET"])
-async def health(_request: Request) -> JSONResponse:
+async def _health(_request: Request) -> JSONResponse:
     """Публичный health endpoint для Railway healthcheck."""
     return JSONResponse({"status": "ok", "version": __version__})
 
 
-def _build_app():  # noqa: ANN202
-    """Собираем ASGI-приложение и навешиваем bearer-аутентификацию.
+def _build_app() -> Starlette:
+    """Внешний Starlette: /health + Mount("/", FastMCP) + bearer middleware.
 
-    BearerAuthMiddleware сам пропускает /health и /healthz.
+    Lifespan FastMCP-приложения проксируется через inner.router.lifespan_context,
+    чтобы при старте сервера выполнился наш `lifespan(server)` и поднял SearchEngine.
     """
     settings = get_settings()
-    asgi_app = mcp.streamable_http_app()
-    asgi_app.add_middleware(BearerAuthMiddleware, secret=settings.mcp_secret_key)
-    return asgi_app
+    inner = mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def _lifespan(_app: Starlette) -> AsyncIterator[None]:
+        async with inner.router.lifespan_context(inner):
+            yield
+
+    return Starlette(
+        routes=[
+            Route("/health", _health, methods=["GET"]),
+            Route("/healthz", _health, methods=["GET"]),
+            Mount("/", app=inner),
+        ],
+        middleware=[
+            Middleware(BearerAuthMiddleware, secret=settings.mcp_secret_key),
+        ],
+        lifespan=_lifespan,
+    )
 
 
 # Готовый ASGI-инстанс для uvicorn / gunicorn.
