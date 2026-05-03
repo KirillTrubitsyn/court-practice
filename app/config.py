@@ -61,6 +61,21 @@ class Settings(BaseSettings):
         }
         return {k: v for k, v in candidates.items() if v is not None}
 
+    # === OAuth (multi-user через shared password) ===
+    # Если задан — на /authorize показывается форма с этим паролем.
+    # Все коллеги вводят один и тот же пароль (как Wi-Fi). Если None — OAuth flow выключен,
+    # работает только static Bearer (через MCP_SECRET_KEY) для Claude Desktop/Code.
+    mcp_auth_password: str | None = None
+
+    # Публичный URL сервиса. Если задан — используется в OAuth metadata вместо
+    # вычисленного из request. Полезно за прокси, который не выставляет X-Forwarded-*.
+    public_base_url: str | None = None
+
+    # TTL access_token (JWT) и refresh_token.
+    oauth_access_token_ttl_s: int = 24 * 60 * 60  # 24h
+    oauth_refresh_token_ttl_s: int = 30 * 24 * 60 * 60  # 30d
+    oauth_authorization_code_ttl_s: int = 120  # 2 мин — RFC 6749 рекомендует ≤ 10 мин
+
     # === Прочее ===
     log_level: str = "INFO"
     port: int = 8000
