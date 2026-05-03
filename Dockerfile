@@ -19,6 +19,9 @@ RUN pip install -r requirements.txt
 
 COPY app ./app
 COPY scripts ./scripts
+# Дефолтные индекс и эмбеддинги. При первом старте сервер скопирует их
+# в Railway Volume через _seed_volume_if_empty().
+COPY data ./data
 
 # Volume mountpoint должен существовать в образе (Railway монтирует поверх).
 RUN mkdir -p /data

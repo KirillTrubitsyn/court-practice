@@ -13,10 +13,12 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -100,6 +102,51 @@ def _build_engine(
     )
 
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_DATA_DIR = _REPO_ROOT / "data"
+_SEED_FILES = ("index.pkl.gz", "embeddings.npy")
+
+
+def _seed_volume_if_empty(target_dir: Path) -> None:
+    """Скопировать index.pkl.gz и embeddings.npy в target_dir, если их там нет.
+
+    Railway монтирует Volume поверх /data, перекрывая то, что собрано в образе.
+    Файлы из репозитория попадают в образ под /app/data/, а Voyage Volume — это /data.
+    Этот хелпер один раз на чистом Volume copy-on-empty копирует данные. Идемпотентен:
+    при повторных запусках проверяет наличие файлов в target и не перезаписывает.
+    """
+    if target_dir.resolve() == _REPO_DATA_DIR:
+        return  # локальный запуск, всё уже на месте
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("seed_mkdir_failed", extra={"dir": str(target_dir), "err": str(exc)})
+        return
+
+    for filename in _SEED_FILES:
+        target = target_dir / filename
+        source = _REPO_DATA_DIR / filename
+        if target.exists():
+            continue
+        if not source.exists():
+            logger.info("seed_skip_no_source", extra={"file": filename, "src": str(source)})
+            continue
+        try:
+            shutil.copy2(source, target)
+            logger.info(
+                "seed_copied",
+                extra={
+                    "file": filename,
+                    "size_bytes": target.stat().st_size,
+                    "src": str(source),
+                    "dst": str(target),
+                },
+            )
+        except OSError as exc:
+            logger.warning("seed_copy_failed", extra={"file": filename, "err": str(exc)})
+
+
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncIterator[AppState]:
     settings = get_settings()
@@ -107,6 +154,9 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppState]:
     logger.info(
         "startup_begin", extra={"version": __version__, "data_dir": str(settings.data_dir)}
     )
+
+    # Один раз при первом старте перенесём дефолтные индекс/эмбеддинги из образа в Volume.
+    _seed_volume_if_empty(settings.data_dir)
 
     voyage = VoyageClient(
         api_key=settings.voyage_api_key,
