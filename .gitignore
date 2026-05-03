@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Data artefacts — индексы и эмбеддинги храним в Volume, а не в git
+data/*.pkl
+data/*.pkl.gz
+data/*.npy
+data/*.json
+!data/.gitkeep
+
+# Reference (приложенный исходный скилл, если положишь)
+reference/

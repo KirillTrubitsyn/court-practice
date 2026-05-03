@@ -1,0 +1,15 @@
+# Railway конфиг. Нативный Python билд через nixpacks; Dockerfile есть как fallback.
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+# Procfile задаёт реальную команду запуска.
+startCommand = "uvicorn app.server:app --host 0.0.0.0 --port ${PORT}"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Volume для индекса и эмбеддингов. Подключи к сервису через Railway UI:
+#   Variables → New Volume → Mount path: /data → Size: 1 GB.
+# После создания Volume переменная DATA_DIR=/data выставляется в Variables.
