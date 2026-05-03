@@ -1,16 +1,13 @@
-"""FastMCP сервер с Streamable HTTP транспортом.
+"""FastMCP сервер с Streamable HTTP транспортом + OAuth 2.1.
 
 Точка входа для uvicorn: `uvicorn app.server:app`.
 
 Архитектура:
 - mcp = FastMCP(...) — инстанс с lifespan, внутри которого инициализируется SearchEngine.
 - mcp.streamable_http_app() возвращает Starlette ASGI app с MCP на /mcp.
-- Оборачиваем его внешним Starlette: добавляем /health (без auth) + bearer middleware.
-- Lifespan проксируется через `inner.router.lifespan_context` — иначе FastMCP-ный
-  startup/shutdown не выполнится.
-
-В mcp==1.6.0 нет `mcp.custom_route` — поэтому /health прибит как обычный Route
-во внешнем Starlette, а BearerAuthMiddleware сам пропускает /health и /healthz.
+- Оборачиваем его внешним Starlette: добавляем /health + OAuth endpoints + bearer middleware.
+- Для claude.ai web реализован полный OAuth 2.1 flow (DCR + PKCE S256 + JWT access_token).
+- Для Claude Desktop/Code остаётся static Bearer через MCP_SECRET_KEY.
 """
 
 from __future__ import annotations
@@ -19,6 +16,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
@@ -31,6 +29,18 @@ from app import __version__
 from app.auth import BearerAuthMiddleware
 from app.config import Settings, get_settings
 from app.logging_setup import configure_logging
+from app.oauth.authorization import (
+    make_authorize_get_handler,
+    make_authorize_post_handler,
+)
+from app.oauth.discovery import (
+    make_authorization_server_metadata_handler,
+    make_protected_resource_handler,
+)
+from app.oauth.jwt_utils import verify_access_token
+from app.oauth.registration import make_register_handler
+from app.oauth.store import OAuthStores
+from app.oauth.token import make_token_handler
 from app.search.bm25 import DEFAULT_SECTION_WEIGHTS
 from app.search.engine import IndexBundle, SearchEngine
 from app.search.semantic import SemanticIndex, VoyageClient
@@ -48,8 +58,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class AppState:
-    """Контейнер lifespan-state. Tools достают его через ctx.request_context.lifespan_context."""
-
     settings: Settings
     engine: SearchEngine | None
     voyage: VoyageClient | None
@@ -132,6 +140,7 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppState]:
                 "engine_ready": engine is not None,
                 "redis": cache is not None,
                 "embeddings": engine.has_embeddings if engine else False,
+                "oauth_enabled": settings.mcp_auth_password is not None,
             },
         )
         yield state
@@ -143,7 +152,6 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppState]:
         logger.info("shutdown_done")
 
 
-# FastMCP инстанс. streamable_http_path по умолчанию "/mcp".
 mcp = FastMCP(
     name="court-practice",
     instructions=(
@@ -157,25 +165,11 @@ register_all(mcp)
 
 
 async def _health(_request: Request) -> JSONResponse:
-    """Публичный health endpoint. Принимаем GET/POST/HEAD — Railway пингует разными методами."""
     return JSONResponse({"status": "ok", "version": __version__})
 
 
-async def _oauth_not_supported(_request: Request) -> JSONResponse:
-    """Discovery-эндпоинты OAuth 2.1, на которые ходит claude.ai web.
-
-    Мы НЕ реализуем OAuth — auth у нас static Bearer из конфига коннектора.
-    Возвращаем 404, чтобы клиент откатился на Bearer flow вместо registration.
-    """
-    return JSONResponse({"error": "not_found"}, status_code=404)
-
-
 def _build_app() -> Starlette:
-    """Внешний Starlette: /health + discovery 404s + Mount("/", FastMCP) + bearer middleware.
-
-    Lifespan FastMCP-приложения проксируется через inner.router.lifespan_context,
-    чтобы при старте сервера выполнился наш `lifespan(server)` и поднял SearchEngine.
-    """
+    """Внешний Starlette с health + OAuth endpoints + Mount("/", FastMCP) + bearer middleware."""
     settings = get_settings()
     inner = mcp.streamable_http_app()
 
@@ -184,43 +178,71 @@ def _build_app() -> Starlette:
         async with inner.router.lifespan_context(inner):
             yield
 
+    # OAuth state живёт всё время процесса. На рестарте теряется — клиенты переподключатся.
+    stores = OAuthStores.create(
+        client_ttl_s=365 * 24 * 60 * 60,  # 1 год — клиенты не должны истекать
+        code_ttl_s=settings.oauth_authorization_code_ttl_s,
+        refresh_ttl_s=settings.oauth_refresh_token_ttl_s,
+    )
+
+    # Handlers
     health_methods = ["GET", "POST", "HEAD"]
-    oauth_methods = ["GET", "POST", "HEAD"]
+    discovery_methods = ["GET", "HEAD"]
+
+    pr_handler = make_protected_resource_handler(settings.public_base_url)
+    asm_handler = make_authorization_server_metadata_handler(settings.public_base_url)
+    register_handler = make_register_handler(stores)
+    authorize_get = make_authorize_get_handler(stores)
+    authorize_post = make_authorize_post_handler(
+        stores,
+        password_provider=lambda: settings.mcp_auth_password,
+    )
+    token_handler = make_token_handler(
+        stores,
+        jwt_secret=settings.mcp_secret_key,
+        access_ttl_s=settings.oauth_access_token_ttl_s,
+        refresh_ttl_s=settings.oauth_refresh_token_ttl_s,
+    )
+
+    jwt_verifier = partial(verify_access_token, settings.mcp_secret_key)
 
     return Starlette(
         routes=[
             Route("/health", _health, methods=health_methods),
             Route("/healthz", _health, methods=health_methods),
-            # OAuth 2.1 discovery: возвращаем 404, чтобы клиент пошёл на static Bearer.
-            Route(
-                "/.well-known/oauth-authorization-server",
-                _oauth_not_supported,
-                methods=oauth_methods,
-            ),
+            # OAuth 2.1 discovery (RFC 8414, RFC 9728).
             Route(
                 "/.well-known/oauth-protected-resource",
-                _oauth_not_supported,
-                methods=oauth_methods,
+                pr_handler,
+                methods=discovery_methods,
             ),
             Route(
                 "/.well-known/oauth-protected-resource/mcp",
-                _oauth_not_supported,
-                methods=oauth_methods,
+                pr_handler,
+                methods=discovery_methods,
             ),
             Route(
-                "/.well-known/openid-configuration",
-                _oauth_not_supported,
-                methods=oauth_methods,
+                "/.well-known/oauth-authorization-server",
+                asm_handler,
+                methods=discovery_methods,
             ),
-            Route("/register", _oauth_not_supported, methods=oauth_methods),
+            # OAuth flow.
+            Route("/register", register_handler, methods=["POST"]),
+            Route("/authorize", authorize_get, methods=["GET"]),
+            Route("/authorize", authorize_post, methods=["POST"]),
+            Route("/token", token_handler, methods=["POST"]),
+            # MCP сам.
             Mount("/", app=inner),
         ],
         middleware=[
-            Middleware(BearerAuthMiddleware, secret=settings.mcp_secret_key),
+            Middleware(
+                BearerAuthMiddleware,
+                static_secret=settings.mcp_secret_key,
+                jwt_verifier=jwt_verifier,
+            ),
         ],
         lifespan=_lifespan,
     )
 
 
-# Готовый ASGI-инстанс для uvicorn / gunicorn.
 app = _build_app()

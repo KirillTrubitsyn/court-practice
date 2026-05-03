@@ -27,3 +27,7 @@ structlog==24.4.0
 
 # Утилиты
 tqdm==4.67.1
+
+# OAuth: подпись JWT (HS256). cryptography подтянется как dep — нужна для signing.
+PyJWT==2.10.1
+itsdangerous==2.2.0
