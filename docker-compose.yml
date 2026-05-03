@@ -1,0 +1,26 @@
+# Локальная разработка: сервер + Redis. Volumes держат индекс между перезапусками.
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY}
+      - MCP_SECRET_KEY=${MCP_SECRET_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - DATA_DIR=/data
+      - LOG_LEVEL=DEBUG
+      - PORT=8000
+    ports: ["8000:8000"]
+    volumes:
+      - ./data:/data

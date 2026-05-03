@@ -1,0 +1,28 @@
+# MCP SDK (включает FastMCP). 1.6+ поддерживает streamable-http транспорт.
+mcp[cli]==1.6.0
+
+# ASGI + сервер
+starlette==0.41.3
+uvicorn[standard]==0.32.1
+
+# Конфиг
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# HTTP клиент для Voyage
+httpx==0.28.1
+
+# Поиск
+rank-bm25==0.2.2
+pymorphy3==2.0.3
+pymorphy3-dicts-ru==2.4.417150.4580142
+numpy==2.1.3
+
+# Кэш
+redis==5.2.1
+
+# Логи
+structlog==24.4.0
+
+# Утилиты
+tqdm==4.67.1
