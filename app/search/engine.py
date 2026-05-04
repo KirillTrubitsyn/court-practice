@@ -187,6 +187,10 @@ class SearchEngine:
         # year_range это не должно влиять (корпус 2018+).
         years = sorted({d.year for d in self._docs if d.year and d.year >= _MIN_REASONABLE_YEAR})
         with_vs = sum(1 for d in self._docs if d.sections.get("vs_position"))
+        # unique_cases — только по primary case_id (первое попадание в case_number).
+        # case_groups содержит и referenced id (упоминания старых дел в обзоре),
+        # из-за чего его длина может превышать число документов.
+        unique_cases = len({d.case_id for d in self._docs if d.case_id})
         return {
             **self._meta,
             "by_court": {
@@ -196,7 +200,7 @@ class SearchEngine:
             },
             "year_range": [years[0], years[-1]] if years else [],
             "with_structured_vs_position": with_vs,
-            "unique_cases": len(self._case_groups),
+            "unique_cases": unique_cases,
             "unique_tags": len(self._tag_counts),
         }
 
