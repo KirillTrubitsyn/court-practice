@@ -50,7 +50,20 @@ def main() -> int:
     for doc in docs:
         old_year = doc.get("year")
         anchor_year = year_from_anchor(doc.get("text", ""))
-        case_year = year_from_case_number(doc.get("case_number", ""))
+
+        # Берём максимум case_year по всем найденным id обзора. Один обзор может
+        # цитировать несколько определений (multi-id), последний по времени — это
+        # обычно главный кейс обзора, более ранние — referenced. case_number в
+        # исходном Telegram-канале может быть мусором ("определении от 20.03.2014"),
+        # поэтому идём через нормализованные case_ids/case_id.
+        candidate_ids = list(doc.get("case_ids") or [])
+        if doc.get("case_id") and doc["case_id"] not in candidate_ids:
+            candidate_ids.append(doc["case_id"])
+        # Plus оригинальный case_number — на случай если case_ids пуст.
+        case_years = [year_from_case_number(cid) for cid in candidate_ids]
+        case_years.append(year_from_case_number(doc.get("case_number", "")))
+        case_year = max((y for y in case_years if y is not None), default=None)
+
         if anchor_year is None and case_year is None:
             cnt_no_signal += 1
             continue
