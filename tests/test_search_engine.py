@@ -33,6 +33,53 @@ async def test_dedup_disabled_keeps_both(engine_bm25: SearchEngine) -> None:
     assert 1 in ids and 4 in ids
 
 
+async def test_dedup_collapses_via_case_ids_intersection(
+    bundle, documents, lemmatizer
+) -> None:
+    """Multi-id дедуп: один документ с двумя case_id'ами и второй с одним из них
+    должны схлопнуться, даже если их `case_id` (первый) разный."""
+    from copy import deepcopy
+
+    from app.search.bm25 import DEFAULT_SECTION_WEIGHTS
+    from app.search.engine import SearchEngine
+
+    docs = deepcopy(documents)
+    # Doc 1: ВС-кассация + параллельный арбитражный номер
+    docs[0].case_id = "305-ЭС24-12345"
+    docs[0].case_ids = ["305-ЭС24-12345", "А40-1/2024"]
+    # Doc 4: тот же арбитражный, но с другим первым case_id
+    docs[3].case_id = "А40-1/2024"
+    docs[3].case_ids = ["А40-1/2024"]
+
+    engine = SearchEngine(
+        bundle=bundle,
+        section_weights=dict(DEFAULT_SECTION_WEIGHTS),
+        semantic=None,
+        voyage=None,
+        cache=None,
+    )
+    hits = await engine.search("неустойка договор поставки", mode="bm25", limit=10)
+    ids = [h.id for h in hits]
+    assert 1 in ids
+    assert 4 not in ids  # схлопнут через А40-1/2024 в case_ids
+
+
+async def test_fuzzy_tag_matching(engine_bm25: SearchEngine) -> None:
+    """tag='исковая давность' (с пробелом) должен находить хештег 'исковаяданность'/'исковая_давность'."""
+    # В фикстуре hashtags=['исковая давность'] у doc 2.
+    # Запрос с разделителями всё равно должен сработать.
+    hits = await engine_bm25.search("", mode="bm25", tag="ИсковаяДавность", limit=10)
+    ids = [h.id for h in hits]
+    assert 2 in ids
+
+
+async def test_stats_excludes_year_outliers(engine_bm25: SearchEngine) -> None:
+    """year_range в stats не должен включать годы < 2000."""
+    s = engine_bm25.stats()
+    if s["year_range"]:
+        assert s["year_range"][0] >= 2000
+
+
 async def test_filter_by_court(engine_bm25: SearchEngine) -> None:
     hits = await engine_bm25.search("имущество супругов", mode="bm25", court="СКГД", limit=5)
     assert hits, "должны найтись кейсы СКГД"

@@ -95,21 +95,55 @@ def parse_sections(text: str) -> dict[str, str]:
     return sections
 
 
+def extract_case_ids(*texts: str) -> list[str]:
+    """Все канонические id, найденные в текстах (case_number + полный текст обзора).
+
+    Один обзор может одновременно упоминать номер кассации, арбитражный номер и
+    гражданский — мы извлекаем все, чтобы дедуп работал по пересечению множеств.
+    Дубли убираются (порядок сохраняется).
+
+    Reference brewed только первое попадание из case_number; мы расширили поиск
+    на full text и собираем set, чтобы решить проблему дубликатов из разных
+    Telegram-каналов под разными форматами id.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for text in texts:
+        if not text:
+            continue
+        normalized = re.sub(r"\s+", " ", text)
+        for pattern, builder in _CASE_ID_PATTERNS:
+            for match in pattern.finditer(normalized):
+                cid = builder(match)
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    out.append(cid)
+    return out
+
+
+_CASE_ID_PATTERNS = [
+    # Кассационная экономическая коллегия (СКЭС): "305-ЭС23-29227"
+    (
+        re.compile(r"\b(\d{2,3})[\s-]?[Ээ][Сс][\s-]?(\d{1,2})[\s-]?(\d{2,6})"),
+        lambda m: f"{m.group(1)}-ЭС{m.group(2)}-{m.group(3)}",
+    ),
+    # Арбитражный (АС): "А40-96313/2021"
+    (
+        re.compile(r"\bА\s*(\d{1,3})[\s-](\d{1,7})\s*/\s*(\d{4})"),
+        lambda m: f"А{m.group(1)}-{m.group(2)}/{m.group(3)}",
+    ),
+    # Гражданская коллегия (СКГД): "5-КГ22-300"
+    (
+        re.compile(r"\b(\d{1,3})[\s-]?КГ[\s-]?(\d{1,2})[\s-]?(\d{1,6})"),
+        lambda m: f"{m.group(1)}-КГ{m.group(2)}-{m.group(3)}",
+    ),
+]
+
+
 def normalize_case_id(case_number: str) -> str:
-    """Канонический id для дедупа. Три формата: ВС-кассация, арбитраж, гражданское."""
-    if not case_number:
-        return ""
-    text = re.sub(r"\s+", " ", case_number).strip()
-    vs_match = re.search(r"\b(\d{2,3})[\s-]?[ЭЭКк][СсГг][\s-]?(\d{1,2})[\s-]?(\d{2,6})", text)
-    if vs_match:
-        return f"{vs_match.group(1)}-{vs_match.group(2)}-{vs_match.group(3)}"
-    arb_match = re.search(r"\bА\s*(\d{1,3})[\s-](\d{1,7})\s*/\s*(\d{4})", text)
-    if arb_match:
-        return f"А{arb_match.group(1)}-{arb_match.group(2)}/{arb_match.group(3)}"
-    civ_match = re.search(r"\b(\d{1,3})[\s-]?КГ[\s-]?(\d{1,2})[\s-]?(\d{1,6})", text)
-    if civ_match:
-        return f"{civ_match.group(1)}-КГ{civ_match.group(2)}-{civ_match.group(3)}"
-    return ""
+    """Backward-compatible API: первый id из найденных, либо пустая строка."""
+    ids = extract_case_ids(case_number)
+    return ids[0] if ids else ""
 
 
 def parse_date(date_str: str) -> str:
@@ -181,7 +215,10 @@ def enrich_documents(raw: list[dict[str, Any]], lem: Lemmatizer) -> list[dict[st
         for tag in msg.get("hashtags", []):
             tag_lemmas.extend(lem.tokenize(tag))
 
-        case_id = normalize_case_id(msg.get("case_number", ""))
+        # Парсим id и из case_number, и из полного текста — каналы-перепоставщики
+        # часто упоминают альтернативный формат id внутри тела сообщения.
+        case_ids = extract_case_ids(msg.get("case_number", ""), msg.get("text", ""))
+        case_id = case_ids[0] if case_ids else ""
         iso_date = parse_date(msg.get("date", ""))
         year = int(iso_date[:4]) if iso_date else None
 
@@ -194,6 +231,7 @@ def enrich_documents(raw: list[dict[str, Any]], lem: Lemmatizer) -> list[dict[st
             "title": title,
             "case_number": msg.get("case_number", ""),
             "case_id": case_id,
+            "case_ids": case_ids,  # все найденные id одного дела
             "text": msg.get("text", ""),
             "hashtags": msg.get("hashtags", []),
             "articles": msg.get("articles", []),
@@ -223,11 +261,13 @@ def build_bm25(enriched: list[dict[str, Any]]) -> dict[str, BM25Okapi]:
 
 
 def build_case_groups(enriched: list[dict[str, Any]]) -> dict[str, list[int]]:
+    """Группы документов по каждому case_id. Документ может попасть в несколько групп
+    если у него несколько id (номер кассации + арбитражный)."""
     groups: dict[str, list[int]] = {}
     for doc in enriched:
-        cid = doc["case_id"]
-        if cid:
-            groups.setdefault(cid, []).append(doc["id"])
+        for cid in doc.get("case_ids") or ([doc["case_id"]] if doc.get("case_id") else []):
+            if cid:
+                groups.setdefault(cid, []).append(doc["id"])
     return groups
 
 
