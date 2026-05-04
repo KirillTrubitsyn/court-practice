@@ -107,13 +107,15 @@ _REPO_DATA_DIR = _REPO_ROOT / "data"
 _SEED_FILES = ("index.pkl.gz", "embeddings.npy")
 
 
-def _seed_volume_if_empty(target_dir: Path) -> None:
-    """Скопировать index.pkl.gz и embeddings.npy в target_dir, если их там нет.
+def _seed_volume_if_empty(target_dir: Path, force: bool = False) -> None:
+    """Скопировать index.pkl.gz и embeddings.npy в target_dir.
 
     Railway монтирует Volume поверх /data, перекрывая то, что собрано в образе.
-    Файлы из репозитория попадают в образ под /app/data/, а Voyage Volume — это /data.
-    Этот хелпер один раз на чистом Volume copy-on-empty копирует данные. Идемпотентен:
-    при повторных запусках проверяет наличие файлов в target и не перезаписывает.
+    Файлы из репозитория попадают в образ под /app/data/, а Volume — это /data.
+    Этот хелпер один раз на чистом Volume copy-on-empty копирует данные.
+
+    Если force=True (env FORCE_RESEED_DATA=true) — перезаписывает существующие.
+    Полезно после обновления схемы индекса в репо.
     """
     if target_dir.resolve() == _REPO_DATA_DIR:
         return  # локальный запуск, всё уже на месте
@@ -127,7 +129,7 @@ def _seed_volume_if_empty(target_dir: Path) -> None:
     for filename in _SEED_FILES:
         target = target_dir / filename
         source = _REPO_DATA_DIR / filename
-        if target.exists():
+        if target.exists() and not force:
             continue
         if not source.exists():
             logger.info("seed_skip_no_source", extra={"file": filename, "src": str(source)})
@@ -141,6 +143,7 @@ def _seed_volume_if_empty(target_dir: Path) -> None:
                     "size_bytes": target.stat().st_size,
                     "src": str(source),
                     "dst": str(target),
+                    "forced": force,
                 },
             )
         except OSError as exc:
@@ -156,7 +159,8 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[AppState]:
     )
 
     # Один раз при первом старте перенесём дефолтные индекс/эмбеддинги из образа в Volume.
-    _seed_volume_if_empty(settings.data_dir)
+    # Если FORCE_RESEED_DATA=true — перезатрём существующие (после обновления схемы).
+    _seed_volume_if_empty(settings.data_dir, force=settings.force_reseed_data)
 
     voyage = VoyageClient(
         api_key=settings.voyage_api_key,

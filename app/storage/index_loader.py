@@ -46,7 +46,11 @@ def _open_pickle(path: Path) -> Any:
 
 
 def _to_document(raw: dict[str, Any]) -> Document:
-    """Привести dict из reference-индекса к нашему Document."""
+    """Привести dict из reference-индекса к нашему Document.
+
+    Backward compat: если в pickle нет поля `case_ids` (старая схема), формируем
+    его из одиночного `case_id`.
+    """
     sections_raw = raw.get("sections") or {}
     sections: Sections = {  # type: ignore[typeddict-item]
         "fabula": str(sections_raw.get("fabula", "")),
@@ -55,6 +59,14 @@ def _to_document(raw: dict[str, Any]) -> Document:
         "residual": str(sections_raw.get("residual", "")),
     }
     lemmas_raw = raw.get("lemmas") or {}
+    case_id = str(raw.get("case_id", ""))
+    case_ids_raw = raw.get("case_ids")
+    if case_ids_raw:
+        case_ids = [str(x) for x in case_ids_raw if x]
+    elif case_id:
+        case_ids = [case_id]  # backward compat
+    else:
+        case_ids = []
     return Document(
         id=int(raw["id"]),
         court=str(raw.get("court", "")),
@@ -63,7 +75,8 @@ def _to_document(raw: dict[str, Any]) -> Document:
         year=raw.get("year") if raw.get("year") is None else int(raw["year"]),
         title=str(raw.get("title", "")),
         case_number=str(raw.get("case_number", "")),
-        case_id=str(raw.get("case_id", "")),
+        case_id=case_id,
+        case_ids=case_ids,
         text=str(raw.get("text", "")),
         hashtags=list(raw.get("hashtags", []) or []),
         articles=list(raw.get("articles", []) or []),

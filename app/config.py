@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     data_dir: Path = Path("./data")
 
+    # Если true — при старте перезатереть index.pkl.gz и embeddings.npy в DATA_DIR
+    # дефолтными из репо. Полезно после обновления схемы индекса (multi-id dedup).
+    # После однократного успешного запуска выставить обратно в false.
+    force_reseed_data: bool = False
+
     # === Voyage ===
     voyage_model: str = "voyage-3-large"
     voyage_embed_dim: int = 1024

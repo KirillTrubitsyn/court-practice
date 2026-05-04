@@ -40,6 +40,19 @@ STRUCTURED_VS_BOOST: Final = 1.10
 PROXIMITY_MAX_DISTANCE: Final = 3
 PROXIMITY_BOOST_FACTOR: Final = 0.5  # multiplier add: 1 + factor * proximity_score
 PROXIMITY_TITLE_VS_WEIGHT: Final = 1.5  # title/vs_position — внутренний вес секции в proximity
+# Кейсы старше этого года считаем артефактом парсера дат (опечатки в исходных постах).
+_MIN_REASONABLE_YEAR: Final = 2000
+
+
+def _normalize_tag(s: str) -> str:
+    """Нормализация для сравнения тегов: lower + удаление пробелов и подчёркиваний.
+
+    Telegram-хештеги слитные (`семейныеспоры`), а пользователи естественно пишут
+    `семейные споры` или `семейные_споры`. Все три должны находить друг друга.
+    """
+    import re
+
+    return re.sub(r"[\s_-]+", "", s.lower())
 
 
 SearchMode = Literal["hybrid", "bm25", "semantic"]
@@ -63,7 +76,13 @@ class Lemmas(TypedDict, total=False):
 
 @dataclass(slots=True)
 class Document:
-    """Одна запись корпуса. Структура совпадает с reference/scripts/index.py."""
+    """Одна запись корпуса. Структура совпадает с reference/scripts/index.py.
+
+    `case_id`: первый найденный канонический id (для обратной совместимости с reference).
+    `case_ids`: множество всех найденных идентификаторов одного дела (номер кассации,
+    арбитражный, гражданский). Дедупликация работает по пересечению этих множеств:
+    два документа считаются дубликатами если у них есть хотя бы один общий case_id.
+    """
 
     id: int  # Telegram message id
     court: str  # "СКГД" / "СКЭС" / прочее
@@ -72,13 +91,14 @@ class Document:
     year: int | None
     title: str
     case_number: str
-    case_id: str  # нормализованный (для дедупа), может быть пустым
+    case_id: str  # первый канонический id (для бэкомпат с reference)
     text: str  # полный текст обзора
     hashtags: list[str]
     articles: list[str]
     source_channel: str
     sections: Sections
     lemmas: Lemmas
+    case_ids: list[str] = field(default_factory=list)  # все найденные id одного дела
 
 
 @dataclass(slots=True)
@@ -162,7 +182,10 @@ class SearchEngine:
     def stats(self) -> dict[str, Any]:
         skgd = sum(1 for d in self._docs if "СКГД" in d.court)
         skes = sum(1 for d in self._docs if "СКЭС" in d.court)
-        years = sorted({d.year for d in self._docs if d.year})
+        # Отбрасываем outliers — в отдельных Telegram-постах попадались опечатки
+        # типа "10.05.1886", парсер их принимал за валидные. На реальный
+        # year_range это не должно влиять (корпус 2018+).
+        years = sorted({d.year for d in self._docs if d.year and d.year >= _MIN_REASONABLE_YEAR})
         with_vs = sum(1 for d in self._docs if d.sections.get("vs_position"))
         return {
             **self._meta,
@@ -296,7 +319,10 @@ class SearchEngine:
         year_to: int | None,
     ) -> list[int]:
         court_norm = court.upper() if court else None
-        tag_lower = tag.lower() if tag else None
+        # Fuzzy tag: Telegram-хештеги слитные ("семейныеспоры"), а пользователь
+        # естественно пишет "семейные споры". Нормализуем оба к единому виду —
+        # убираем все пробельные символы и приводим к lower.
+        tag_normalized = _normalize_tag(tag) if tag else None
         article_lower = article.lower() if article else None
         article_nums: list[str] = []
         if article_lower:
@@ -311,7 +337,9 @@ class SearchEngine:
                     continue
                 if court_norm == "СКЭС" and "СКЭС" not in doc.court:
                     continue
-            if tag_lower and not any(t.lower() == tag_lower for t in doc.hashtags):
+            if tag_normalized and not any(
+                _normalize_tag(t) == tag_normalized for t in doc.hashtags
+            ):
                 continue
             if article_lower:
                 text_lower = doc.text.lower()
@@ -361,26 +389,52 @@ class SearchEngine:
         limit: int,
         deduplicate: bool,
     ) -> list[SearchHit]:
+        """Свернуть дубликаты по пересечению множеств case_ids.
+
+        Раньше дедуп шёл по точному совпадению одиночного `case_id`. Это ломалось
+        когда один и тот же кейс попадал в разные telegram-каналы под разными
+        форматами id (напр. 305-ЭС23-29227 vs А40-96313/2021). Теперь храним все
+        найденные id и сравниваем как множества: дубликаты — у которых есть хотя
+        бы один общий id.
+        """
         if not deduplicate:
             return [self._to_hit(self._docs[i], s) for s, i in scored[:limit]]
 
-        seen: dict[str, SearchHit] = {}
+        # id_to_hit: case_id → ссылка на главный hit. Все id одной группы указывают
+        # на один и тот же объект, поэтому объединение групп через любой общий id
+        # сразу даёт правильный лидер.
+        id_to_hit: dict[str, SearchHit] = {}
         out: list[SearchHit] = []
         for score, i in scored:
             doc = self._docs[i]
-            cid = doc.case_id
-            if cid:
-                if cid in seen:
-                    seen[cid].alternative_channels.append(doc.source_channel)
+            ids = self._doc_case_ids(doc)
+            if not ids:
+                out.append(self._to_hit(doc, score))
+            else:
+                # Если хотя бы один id уже видели — это дубликат
+                existing = next((id_to_hit[cid] for cid in ids if cid in id_to_hit), None)
+                if existing is not None:
+                    if doc.source_channel and doc.source_channel not in existing.alternative_channels:
+                        existing.alternative_channels.append(doc.source_channel)
+                    # Расширяем индекс на новые id этой записи (могла принести unique id)
+                    for cid in ids:
+                        id_to_hit.setdefault(cid, existing)
                     continue
                 hit = self._to_hit(doc, score)
-                seen[cid] = hit
+                for cid in ids:
+                    id_to_hit[cid] = hit
                 out.append(hit)
-            else:
-                out.append(self._to_hit(doc, score))
             if len(out) >= limit:
                 break
         return out
+
+    @staticmethod
+    def _doc_case_ids(doc: Document) -> list[str]:
+        """Все идентификаторы документа: case_ids + case_id (для обратной совместимости)."""
+        ids = list(doc.case_ids) if doc.case_ids else []
+        if doc.case_id and doc.case_id not in ids:
+            ids.append(doc.case_id)
+        return ids
 
     async def _embed_query(self, query: str) -> np.ndarray:
         assert self._voyage is not None and self._semantic is not None
