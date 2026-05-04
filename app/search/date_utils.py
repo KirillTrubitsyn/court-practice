@@ -98,20 +98,24 @@ def reconcile_year(
     anchor_year: int | None,
     case_year: int | None,
 ) -> int | None:
-    """Выбрать «правильный» год по убыванию надёжности.
+    """Выбрать «правильный» год определения ВС.
 
-    1. anchor_year — самый надёжный (явная "Определение от ДД.ММ.ГГГГ").
-    2. Если anchor_year отсутствует и date_year < case_year — это артефакт
-       (определение ВС физически не может быть раньше года регистрации дела).
-       Берём case_year.
-    3. Иначе оставляем date_year.
+    Правила:
+    - case_year — нижняя граница реальности: определение ВС не может быть
+      раньше года регистрации дела в ВС. Если он известен — игнорируем
+      любой anchor/date_year < case_year (это цитированные старые акты).
+    - Из «допустимых» (≥ case_year) кандидатов выбираем максимум: anchor
+      обычно совпадает с реальной датой определения, но если в тексте
+      есть и более новое — берём его.
+    - Если все источники меньше case_year — fallback на case_year.
+    - Если case_year неизвестен — приоритет anchor, потом date_year.
     """
-    if anchor_year is not None:
-        return anchor_year
-    if case_year is None:
-        return date_year
-    if date_year is None:
-        return case_year
-    if date_year < case_year:
-        return case_year
-    return date_year
+    floor = case_year
+    candidates: list[int] = []
+    if anchor_year is not None and (floor is None or anchor_year >= floor):
+        candidates.append(anchor_year)
+    if date_year is not None and (floor is None or date_year >= floor):
+        candidates.append(date_year)
+    if candidates:
+        return max(candidates)
+    return floor
