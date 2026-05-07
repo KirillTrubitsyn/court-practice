@@ -278,6 +278,12 @@ def _build_app() -> Starlette:
 
     jwt_verifier = partial(verify_access_token, settings.mcp_secret_key)
 
+    resource_metadata_url: str | None = None
+    if settings.public_base_url:
+        resource_metadata_url = (
+            settings.public_base_url.rstrip("/") + "/.well-known/oauth-protected-resource"
+        )
+
     return Starlette(
         routes=[
             Route("/health", _health, methods=health_methods),
@@ -311,6 +317,7 @@ def _build_app() -> Starlette:
                 BearerAuthMiddleware,
                 static_secret=settings.mcp_secret_key,
                 jwt_verifier=jwt_verifier,
+                resource_metadata_url=resource_metadata_url,
             ),
         ],
         lifespan=_lifespan,
