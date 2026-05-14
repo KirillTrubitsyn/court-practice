@@ -244,9 +244,13 @@ async def amain() -> int:
             full = np.vstack([existing_matrix, new_matrix_fp16])
         else:
             full = new_matrix_fp16
-        tmp = args.embeddings.with_suffix(args.embeddings.suffix + ".tmp")
+        # np.save сам дописывает .npy, поэтому пишем в файл без расширения
+        # и потом переименовываем — иначе временное имя получает лишнее .npy.
+        tmp = args.embeddings.with_suffix(".tmp")
         np.save(tmp, full, allow_pickle=False)
-        tmp.replace(args.embeddings)
+        # np.save мог дописать .npy если у `tmp` его не было; нормализуем имя.
+        produced = tmp if tmp.exists() else tmp.with_suffix(tmp.suffix + ".npy")
+        produced.replace(args.embeddings)
         logger.info(
             "embeddings_saved path=%s shape=%s dtype=%s",
             args.embeddings,
