@@ -117,7 +117,30 @@ python -m scripts.build_index \
 
 Время: ~30 сек на BM25 + ~5–10 минут на Voyage эмбеддинги для 5346 кейсов (~10М токенов, ~$0.2 при `voyage-3-large`).
 
-### 2.4 Проверка
+### 2.4 Инкрементальное добавление свежей практики (без полного дампа)
+
+Когда под рукой только markdown-дайджест и нет полного `court_practice_db.json`, можно докинуть его поверх уже собранного индекса без полной переиндексации:
+
+```bash
+# 1) Парсим markdown в JSON в схеме court_practice_db.json.
+#    --start-id берём как max(existing_ids) + 1 (узнать можно из stats() MCP-tool).
+python -m scripts.parse_markdown_practice \
+    --source "Свежая_практика_ВС_РФ_после_21_03_2026.md" \
+    --out data/new_practice_after_2026_03_21.json \
+    --start-id 5347
+
+# 2) Применяем к существующим index.pkl.gz и embeddings.npy.
+#    Скрипт сам прогонит парсинг секций, лемматизацию, пересоберёт BM25 по всему
+#    корпусу и достроит эмбеддинги ТОЛЬКО для новых документов через Voyage.
+python -m scripts.update_index \
+    --new data/new_practice_after_2026_03_21.json \
+    --index /data/index.pkl.gz \
+    --embeddings /data/embeddings.npy
+```
+
+Без `--embeddings` — обновится только BM25; семантика временно отключится автоматически (engine видит несовпадение `embeddings.shape[0] != len(documents)` и падает в `bm25`-only).
+
+### 2.5 Проверка
 
 ```bash
 curl https://your-service.up.railway.app/health
