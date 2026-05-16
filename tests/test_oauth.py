@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import secrets
-from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlparse
 
 import jwt as pyjwt
@@ -28,9 +28,14 @@ from app.oauth.discovery import (
 )
 from app.oauth.jwt_utils import verify_access_token
 from app.oauth.registration import make_register_handler
-from app.oauth.store import OAuthStores
+from app.oauth.store import (
+    AuthorizationCodeEntry,
+    OAuthStores,
+    RedisTtlStore,
+    RefreshTokenEntry,
+    RegisteredClient,
+)
 from app.oauth.token import make_token_handler
-
 
 SECRET = "x" * 48
 PASSWORD = "team-password"
@@ -350,3 +355,85 @@ def test_issued_jwt_unlocks_mcp(client: TestClient) -> None:
     ).json()["access_token"]
     r = client.post("/mcp", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
+
+
+# ---------- RedisTtlStore: персистентность OAuth-состояния ----------
+
+
+class _FakeRedis:
+    """Минимальный async-фейк redis с decode_responses=True семантикой."""
+
+    def __init__(self, *, broken: bool = False) -> None:
+        self._data: dict[str, str] = {}
+        self._broken = broken
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        if self._broken:
+            raise ConnectionError("redis down")
+        self._data[key] = value
+
+    async def get(self, key: str) -> str | None:
+        if self._broken:
+            raise ConnectionError("redis down")
+        return self._data.get(key)
+
+    async def getdel(self, key: str) -> str | None:
+        if self._broken:
+            raise ConnectionError("redis down")
+        return self._data.pop(key, None)
+
+
+async def test_redis_store_roundtrip_survives_new_instance() -> None:
+    """Запись через один RedisTtlStore читается другим — как переживший рестарт процесс."""
+    shared = _FakeRedis()
+    client = RegisteredClient(
+        client_id="cid",
+        client_name="Claude Web",
+        redirect_uris=["https://claude.ai/cb"],
+        scope="mcp",
+        issued_at=1700000000,
+    )
+
+    def make_store() -> RedisTtlStore[RegisteredClient]:
+        return RedisTtlStore(
+            shared, "p:", 3600, dataclasses.asdict, lambda d: RegisteredClient(**d)
+        )
+
+    await make_store().set("cid", client)
+    # Новый стор поверх того же Redis — имитация процесса после рестарта.
+    restored = await make_store().get("cid")
+    assert restored == client
+
+
+async def test_redis_store_pop_is_one_shot() -> None:
+    store: RedisTtlStore[AuthorizationCodeEntry] = RedisTtlStore(
+        _FakeRedis(), "c:", 120, dataclasses.asdict, lambda d: AuthorizationCodeEntry(**d)
+    )
+    entry = AuthorizationCodeEntry(
+        client_id="cid",
+        redirect_uri="https://claude.ai/cb",
+        scope="mcp",
+        code_challenge="ch",
+        code_challenge_method="S256",
+        user_sub="shared",
+        issued_at=1700000000,
+    )
+    await store.set("code", entry)
+    assert await store.pop("code") == entry
+    assert await store.pop("code") is None
+
+
+async def test_redis_store_falls_back_to_memory_when_redis_down() -> None:
+    """Сбой Redis не ломает OAuth — операции уходят в in-memory fallback."""
+    store: RedisTtlStore[RefreshTokenEntry] = RedisTtlStore(
+        _FakeRedis(broken=True),
+        "r:",
+        3600,
+        dataclasses.asdict,
+        lambda d: RefreshTokenEntry(**d),
+    )
+    entry = RefreshTokenEntry(
+        client_id="cid", scope="mcp", user_sub="shared", issued_at=1700000000
+    )
+    await store.set("tok", entry)  # Redis бросает → пишем в fallback
+    assert await store.get("tok") == entry  # читаем из fallback

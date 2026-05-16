@@ -245,17 +245,22 @@ def _build_app() -> Starlette:
     settings = get_settings()
     inner = mcp.streamable_http_app()
 
-    @asynccontextmanager
-    async def _lifespan(_app: Starlette) -> AsyncIterator[None]:
-        async with inner.router.lifespan_context(inner):
-            yield
-
-    # OAuth state живёт всё время процесса. На рестарте теряется — клиенты переподключатся.
-    stores = OAuthStores.create(
+    # OAuth state в Redis — переживает рестарт процесса (Railway редеплоит при
+    # каждом пуше). Иначе claude.ai теряет refresh token и просит пароль заново.
+    stores = OAuthStores.create_redis(
+        redis_url=settings.redis_url,
         client_ttl_s=365 * 24 * 60 * 60,  # 1 год — клиенты не должны истекать
         code_ttl_s=settings.oauth_authorization_code_ttl_s,
         refresh_ttl_s=settings.oauth_refresh_token_ttl_s,
     )
+
+    @asynccontextmanager
+    async def _lifespan(_app: Starlette) -> AsyncIterator[None]:
+        async with inner.router.lifespan_context(inner):
+            try:
+                yield
+            finally:
+                await stores.aclose()
 
     # Handlers
     health_methods = ["GET", "POST", "HEAD"]

@@ -41,9 +41,11 @@ def make_token_handler(
         grant_type = (form.get("grant_type") or "").strip()
 
         if grant_type == "authorization_code":
-            return _grant_authorization_code(form, stores, jwt_secret, access_ttl_s, refresh_ttl_s)
+            return await _grant_authorization_code(
+                form, stores, jwt_secret, access_ttl_s, refresh_ttl_s
+            )
         if grant_type == "refresh_token":
-            return _grant_refresh_token(form, stores, jwt_secret, access_ttl_s)
+            return await _grant_refresh_token(form, stores, jwt_secret, access_ttl_s)
 
         return JSONResponse(
             {"error": "unsupported_grant_type"},
@@ -53,7 +55,7 @@ def make_token_handler(
     return handler
 
 
-def _grant_authorization_code(
+async def _grant_authorization_code(
     form,  # type: ignore[no-untyped-def]
     stores: OAuthStores,
     jwt_secret: str,
@@ -65,7 +67,7 @@ def _grant_authorization_code(
     redirect_uri = (form.get("redirect_uri") or "").strip()
     code_verifier = (form.get("code_verifier") or "").strip()
 
-    entry = stores.codes.pop(code)  # одноразовый
+    entry = await stores.codes.pop(code)  # одноразовый
     if entry is None:
         logger.warning("oauth_token_invalid_code", extra={"client_id": client_id[:8]})
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
@@ -88,7 +90,7 @@ def _grant_authorization_code(
         ttl_s=access_ttl_s,
     )
     refresh_token = secrets.token_urlsafe(32)
-    stores.refresh_tokens.set(
+    await stores.refresh_tokens.set(
         refresh_token,
         RefreshTokenEntry(
             client_id=entry.client_id,
@@ -109,7 +111,7 @@ def _grant_authorization_code(
     )
 
 
-def _grant_refresh_token(
+async def _grant_refresh_token(
     form,  # type: ignore[no-untyped-def]
     stores: OAuthStores,
     jwt_secret: str,
@@ -118,7 +120,7 @@ def _grant_refresh_token(
     refresh_token = (form.get("refresh_token") or "").strip()
     if not refresh_token:
         return JSONResponse({"error": "invalid_request"}, status_code=400)
-    entry = stores.refresh_tokens.get(refresh_token)
+    entry = await stores.refresh_tokens.get(refresh_token)
     if entry is None:
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
     access_token = issue_access_token(

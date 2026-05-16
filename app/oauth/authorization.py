@@ -107,7 +107,7 @@ def make_authorize_get_handler(stores: OAuthStores):  # type: ignore[no-untyped-
                 {"error": "invalid_request", "error_description": "missing client_id or redirect_uri"},
                 status_code=400,
             )
-        client = stores.clients.get(client_id)
+        client = await stores.clients.get(client_id)
         if client is None:
             return JSONResponse({"error": "invalid_client"}, status_code=400)
         if redirect_uri not in client.redirect_uris:
@@ -152,7 +152,7 @@ def make_authorize_post_handler(stores: OAuthStores, password_provider):  # type
         code_challenge_method = (form.get("code_challenge_method") or "").strip()
         password = form.get("password") or ""
 
-        client = stores.clients.get(client_id)
+        client = await stores.clients.get(client_id)
         if client is None or redirect_uri not in client.redirect_uris:
             return JSONResponse({"error": "invalid_client"}, status_code=400)
 
@@ -186,7 +186,7 @@ def make_authorize_post_handler(stores: OAuthStores, password_provider):  # type
 
         # Пароль сошёлся — выпускаем authorization code и редиректим.
         code = secrets.token_urlsafe(32)
-        stores.codes.set(
+        await stores.codes.set(
             code,
             AuthorizationCodeEntry(
                 client_id=client_id,
