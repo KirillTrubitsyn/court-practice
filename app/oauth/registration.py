@@ -56,7 +56,7 @@ def make_register_handler(stores: OAuthStores):  # type: ignore[no-untyped-def]
         scope = body.get("scope") or "mcp"
         issued_at = int(time.time())
 
-        stores.clients.set(
+        await stores.clients.set(
             client_id,
             RegisteredClient(
                 client_id=client_id,
